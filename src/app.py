@@ -1,16 +1,32 @@
 import os
 import requests
+from flask import Flask
+from threading import Thread
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-# Load cấu hình
+# --- PHẦN 1: Web server giả để Render luôn thấy bot "Online" ---
+app_flask = Flask(__name__)
+
+@app_flask.route('/')
+def home():
+    return "Nexus-Core is alive and scanning!", 200
+
+def run_flask():
+    # Render chỉ định cổng qua biến môi trường PORT
+    port = int(os.environ.get("PORT", 8080))
+    app_flask.run(host='0.0.0.0', port=port)
+
+# Chạy server trong một luồng riêng biệt
+Thread(target=run_flask, daemon=True).start()
+
+# --- PHẦN 2: Core chính của Slack Bot ---
 load_dotenv()
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 
-# Lệnh 1: Quét bảo mật thực tế (Kiểm tra Security Headers)
 @app.command("/nexus-scan")
-def scan_command(ack, body, logger):
+def scan_command(ack, body):
     target = body["text"].strip()
     if not target:
         ack("Vui lòng nhập URL! Ví dụ: /nexus-scan google.com")
@@ -21,11 +37,8 @@ def scan_command(ack, body, logger):
     try:
         if not target.startswith('http'):
             target = "https://" + target
-            
         r = requests.get(target, timeout=5)
         headers = r.headers
-        
-        # Danh sách các header bảo mật cần kiểm tra
         critical_headers = ['Content-Security-Policy', 'X-Frame-Options', 'Strict-Transport-Security']
         missing = [h for h in critical_headers if h not in headers]
         
@@ -33,24 +46,16 @@ def scan_command(ack, body, logger):
             result = f"✅ Website {target} có vẻ an toàn."
         else:
             result = f"⚠️ Website {target} đang thiếu các bảo mật: {', '.join(missing)}"
-            
     except Exception as e:
         result = f"❌ Không thể quét được: {str(e)}"
     
-    # Gửi kết quả thực tế vào kênh
     app.client.chat_postMessage(channel=body["channel_id"], text=result)
 
-# Lệnh 2: Kiểm tra trạng thái
 @app.command("/nexus-status")
-def status_command(ack, body, logger):
+def status_command(ack):
     ack("Nexus-Core đang online 24/7. Hệ thống: *Stable* 🚀")
 
-# Lệnh 3: Ghi log
-@app.command("/nexus-log")
-def log_command(ack, body, logger):
-    user = body["user_name"]
-    ack(f"📝 Đã ghi nhật ký hoạt động cho người dùng: @{user}")
-
+# --- PHẦN 3: Khởi chạy SocketMode ---
 if __name__ == "__main__":
     print("⚡️ Nexus-Core đã khởi động thành công!")
     SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN")).start()
